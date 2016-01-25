@@ -1,0 +1,31 @@
+libname empdata '/home/liliya93930/ecsql1';
+
+proc sql;
+select avg(100*(1 - empl.emp/manl.mng))
+from
+(select avg(Salary) as emp from empdata.employees as em, empdata.employee_organization as orgn where em.Employee_ID = orgn.Employee_ID) as empl,
+(select avg(Salary) as mng from empdata.employees as em, empdata.employee_organization as orgn where em.Employee_ID = orgn.Manager_ID)as manl;
+
+
+proc sql;
+select Department, int(100*(1 - empl.emp/avg(Salary))) as Coeff
+from
+
+(select Department, Manager_ID, avg(Salary) as emp from empdata.employees as em, empdata.employee_organization as orgn where em.Employee_ID = orgn.Employee_ID group by orgn.Department) as empl,
+empdata.employees as em
+where empl.Manager_ID = em.Employee_ID
+group by Department
+order by Coeff desc;
+quit;
+
+proc sql;
+select diffage.range as from_age, (diffage.range + 3) as to_age, int(diffage.avSalary) as MAverSalary, int (diffage1.avSalary) as FAverSalary
+ 
+from (select (age - mod(age, 3)) as range, avg(emp.Salary) as avSalary, emp.Gender from (select yrdif(emp.Birth_Date, Mdy(1,1,2007), 'AGE') as age, Salary, Gender from empdata.employees as emp where Gender = 'M') group by range, Gender) as diffage,
+(select (age - mod(age, 3)) as range, avg(emp.Salary) as avSalary, emp.Gender from (select yrdif(emp.Birth_Date, Mdy(1,1,2007), 'AGE') as age, Salary, Gender from empdata.employees as emp where Gender = 'F') group by range, Gender) as diffage1
+
+where (diffage.range = diffage1.range) and
+(diffage.Gender ^= diffage1.Gender) and
+(diffage.Gender = 'M')
+order by diffage.range;
+quit;  
