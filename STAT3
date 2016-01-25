@@ -1,0 +1,300 @@
+PROC IMPORT DATAFILE="/home/liliya93930/sasuser.v94/develop.csv"
+		    OUT=develop
+		    DBMS=CSV
+		    REPLACE;
+RUN;
+
+proc means data=develop;
+	var ATMAmt Income LORes HMVal DDABal Checks SavBal CRScore Age DepAmt;
+	/*описательная статистика по непр перем*/
+run;
+
+option gstyle;
+ods listing style=statistical;
+goptions reset=all device=gif hsize=10cm vsize=5cm;
+
+proc GCHART data=work.develop;
+ 	VBAR DDA CashBk DirDep NSF Phone Teller Sav ATM POS CD IRA LOC ILS MM MMCred MTG CC CCPurc / DISCRETE;
+ 	PATTERN COLOR=BLACK VALUE=EMPTY;
+run;
+
+proc UNIVARIATE DATA=develop freq;
+ 	var Teller Sav ATM POS CD IRA LOC ILS MM MMCred MTG DDA CashBk DirDep NSF Phone CC CCPurc;
+run;
+    /*описательная статистика по категориал и бинарным перем*/
+data develop1;
+   set develop;
+   /* обозначим перем с пропущ значениями */
+   array mi{*} MIAcctAg MIPhone MIPOS MIPOSAmt 
+               MIInv MIInvBal MICC MICCBal 
+               MICCPurc MIIncome MIHMOwn MILORes
+               MIHMVal MIAge MICRScor;
+   /* переименуем их */
+   array x{*} acctage phone pos posamt 
+              inv invbal cc ccbal
+              ccpurc income hmown lores 
+              hmval age crscore;
+   do i=1 to dim(mi);
+      mi{i}=(x{i}=.);
+   end;
+run;
+
+proc sort data=develop out=develop; 
+   by ins; 
+run;
+
+proc surveyselect noprint ranuni
+                  data = develop 
+                  samprate=.6667 
+                  out=develop
+                  seed=44444
+                  outall;
+   strata ins;
+run;
+
+data train valid;
+   set develop;
+   if selected then output train;
+   else output valid;
+run;
+
+/* Заменяем пропущ значения медианой */
+proc stdize data=develop1 
+            reponly 
+            method=median 
+            out=imputed;
+            var Pos; 
+run;
+
+Proc MI Data = develop 
+out = develop_mi_phone nimpute = 5 seed = 44444;  /*замена пропущ значений предсказанными */
+	var pos checks;
+run;
+
+/* кодирование */
+proc logistic data=develop;
+   class teller mm;
+   model ins = teller mm teller*mm ddabal / expb;
+run;
+
+proc means data=imputed noprint nway;
+   class branch;
+   var ins;
+   output out=categ mean=prop;
+run;
+
+proc print data=categ;
+run;
+
+ods output clusterhistory=cluster;
+
+proc cluster data=categ method=ward outtree=fortree
+        plots=(dendrogram(vertical height=rsq));
+   freq _freq_;
+   var prop;
+   id branch;
+run;
+
+proc freq data=imputed noprint;
+   tables branch*ins / chisq;
+   output out=mult(keep=_pchi_) chisq;
+run;
+
+data cutoff;
+   if _n_ = 1 then set mult;
+   set cluster;
+   chisquare=_pchi_*rsquared;
+   degfree=numberofclusters-1;
+   logpvalue=logsdf('CHISQ',chisquare,degfree);
+run;
+
+proc sgplot data=cutoff;
+   scatter y=logpvalue x=numberofclusters 
+           / markerattrs=(color=blue symbol=circlefilled);
+   xaxis label="Number of Clusters";
+   yaxis label="Log of P-Value" min=-170 max=-130;
+   title "Plot of the Log of the P-Value by Number of Clusters";
+run;
+
+title;
+proc sql;
+   select NumberOfClusters into :ncl
+   from cutoff
+   having logpvalue=min(logpvalue);
+run;
+
+proc tree data=fortree nclusters=&ncl out=clus ;
+   id branch;
+run;
+
+proc sort data=clus;
+   by clusname;
+run;
+
+proc print data=clus;
+   by clusname;
+   id clusname;
+run;
+
+data develop;
+   set develop;
+   brclus1=(branch in ('B6','B9','B19','B8','B1','B17','B3',
+           'B5','B13','B12','B4','B10'));
+   brclus2=(branch='B15');
+   brclus3=(branch='B16');
+   brclus4=(branch='B14');
+run;
+
+/* jпервичный отбор парметров */
+ods output spearmancorr=spearman
+           hoeffdingcorr=hoeffding;
+
+proc corr data=imputed spearman hoeffding rank;
+   var atmamt posamt cdbal mmcred mtgbal ccbal income ddabal checks dirdep nsfamt phone teller savbal lores hmval age crscore depamt;
+   with ins;
+run;
+
+data spearman1(keep=variable scorr spvalue ranksp);
+   length variable $ 8;
+   set spearman;
+   array best(*) best1--best19;
+   array r(*) r1--r19;
+   array p(*) p1--p19;
+   do i=1 to dim(best);
+      variable=best(i);
+      scorr=r(i);
+      spvalue=p(i);
+      ranksp=i;
+      output;
+   end;
+run;
+
+data hoeffding1(keep=variable hcorr hpvalue rankho);
+   length variable $ 8;
+   set hoeffding;
+   array best(*) best1--best19;
+   array r(*) r1--r19;
+   array p(*) p1--p19;
+   do i=1 to dim(best);
+      variable=best(i);
+      hcorr=r(i);
+      hpvalue=p(i);
+      rankho=i;
+      output;
+   end;
+run;
+
+proc sort data=spearman1;
+   by variable;
+run;
+
+proc sort data=hoeffding1;
+   by variable;
+run;
+
+data correlations;
+   merge spearman1 hoeffding1;
+   by variable;
+run;
+
+proc sort data=correlations;
+   by ranksp;
+run;
+
+proc print data=correlations label split='*';
+   var variable ranksp rankho scorr spvalue hcorr hpvalue;
+   label ranksp = 'Spearman rank*of variables'
+         scorr = 'Spearman Correlation'
+         spvalue = 'Spearman p-value'
+         rankho = 'Hoeffding rank*of variables'
+         hcorr = 'Hoeffding Correlation'
+         hpvalue = 'Hoeffding p-value';
+   title "Rank of Spearman Correlations and Hoeffding Correlations";
+run;
+
+
+proc sql noprint;
+   select min(ranksp) into :vref 
+   from (select ranksp 
+         from correlations 
+         having spvalue > .5);
+   select min(rankho) into :href 
+   from (select rankho
+         from correlations
+         having hpvalue > .5);
+quit;
+
+/* Визуализация по рангам важности */
+proc sgplot data=correlations;
+   refline &vref / axis=y;
+   refline &href / axis=x;
+   scatter y=ranksp x=rankho / datalabel=variable;
+   yaxis label="Rank of Spearman";
+   xaxis label="Rank of Hoeffding";
+   title "Scatter Plot of the Ranks of Spearman vs. Hoeffding";
+run;
+
+title;
+%let screened =  
+brclus2 checks ccbal 
+mmbal income ilsbal posamt 
+nsfamt cd irabal age 
+sav dda invbal
+crscore brclus3 cc brclus1 
+cashbk miacctag micrscor moved 
+acctage dirdep savbal ddabal 
+sdb ccpurc inarea atmamt 
+phone mmcred inv 
+depamt brclus4 atm lores;
+
+%let var=DDABal;
+
+/* Группировка переменных для псотроения logit-графика */
+proc rank data=imputed groups=100 out=out;
+   var &var;
+   ranks bin;
+run;
+
+/* Создание Bins          */
+proc means data=out noprint nway;
+   class bin;
+   var ins &var;
+   output out=bins sum(ins)=ins mean(&var)=&var;
+run;
+
+/* Построение logit */ 
+data bins;
+   set bins;
+   elogit=log((ins+(sqrt(_FREQ_ )/2))/
+          ( _FREQ_ -ins+(sqrt(_FREQ_ )/2)));
+run;
+
+proc sgplot data = bins;
+   reg y=elogit x=&var /
+       curvelabel="Linear Relationship?"
+       curvelabelloc=outside
+       lineattrs=(color=ligr);
+   series y=elogit x=&var;
+   title "Empirical Logit against &var";
+run;
+
+proc sgplot data = bins;
+   reg y=elogit x=bin /
+       curvelabel="Linear Relationship?"
+       curvelabelloc=outside
+       lineattrs=(color=ligr);
+   series y=elogit x=bin;
+   title "Empirical Logit against Binned &var";
+run;
+
+proc logistic data=train;
+   class res;
+   model ins = savbal atmamt posamt ddabal checks phone teller cdbal mmcred mtgbal ccbal income dirdep nsfamt lores hmval age crscore depamt;
+   score data = valid out=sco_validate(rename=(p_1=p_only));         
+run;
+
+proc logistic data = sco_validate;
+   model ins = p_only / nofit;
+   roc "Model" p_only;
+   title "Validation Data Set Performance";
+run;
